@@ -3,12 +3,11 @@ const configs = require('./configs');
 const events = require('events');
 const DateUtil = require('./utils/DateUtil');
 const eventEmitter = new events.EventEmitter();
-
-const { ObjectID } = require('mongodb');
+const moment = require('moment');
 
 let sourceDbConnections = {};
-let sourceLastObjectId = {};
 let targetDb = null;
+let sourceDb = null;
 
 const COLLECTION_LIST = {
     INVEN: 'inven',
@@ -24,28 +23,23 @@ const TARGET_DB = 'log';
 eventEmitter.on('processing', async () => {
     console.log("process start");
     const invenDataList = await collecting(
-        sourceDbConnections[COLLECTION_LIST.INVEN],
-        createWherePhrase(COLLECTION_LIST.INVEN)
+        sourceDbConnections[COLLECTION_LIST.INVEN]
     );
 
     const loginDataList = await collecting(
-        sourceDbConnections[COLLECTION_LIST.LOGIN],
-        createWherePhrase(COLLECTION_LIST.LOGIN)
+        sourceDbConnections[COLLECTION_LIST.LOGIN]
     );
 
     const networkDataList = await collecting(
-        sourceDbConnections[COLLECTION_LIST.NETWORK],
-        createWherePhrase(COLLECTION_LIST.NETWORK)
+        sourceDbConnections[COLLECTION_LIST.NETWORK]
     );
 
     const storyDataList = await collecting(
-        sourceDbConnections[COLLECTION_LIST.STORY_LOG],
-        createWherePhrase(COLLECTION_LIST.STORY_LOG)
+        sourceDbConnections[COLLECTION_LIST.STORY_LOG]
     );
 
     const productDataList = await collecting(
-        sourceDbConnections[COLLECTION_LIST.PRODUCT],
-        createWherePhrase(COLLECTION_LIST.PRODUCT)
+        sourceDbConnections[COLLECTION_LIST.PRODUCT]
     );
 
     await parseLog(invenDataList, (invenData) => invenData.logDate, COLLECTION_LIST.INVEN);
@@ -60,6 +54,29 @@ eventEmitter.on('processing', async () => {
         console.log('collect end');
         
 });
+
+// testFuncDrop("inven");
+// testFuncDrop("login");
+// testFuncDrop("network");
+// testFuncDrop("story_log");
+// testFuncDrop("product");
+
+async function testFuncDrop(prefix) {
+    const connection = await MongoConnectionHelper.setConnection(configs.dbMongoLog);
+    const db = connection.db(SOURCE_DB);
+    
+    for(let i = 30 ; i >= 0; i--) {
+        const YYYYMMDD = DateUtil.utsToDs(moment().subtract(i, "days").unix(), DateUtil.YYYYMMDD);
+        const collectionName = `${prefix}_${YYYYMMDD}`;
+        try {
+            await db.dropCollection(collectionName);
+            console.log(`${collectionName} - drop`);
+        }
+        catch(err) {
+            console.log(`${collectionName} - drop err`);
+        }
+    }
+}
 
 async function start() {
     const connection = await MongoConnectionHelper.setConnection(configs.dbMongoLog);
@@ -76,12 +93,8 @@ async function start() {
     eventEmitter.emit('processing');
 }
 
-function createWherePhrase(collectionName) {
-    return sourceLastObjectId[collectionName] ? { "_id": { "$gt": ObjectID(sourceLastObjectId[collectionName]) } } : {}
-}
-
-async function collecting(connection, wherePhrase) {
-    return await connection.find(wherePhrase, { limit: 100 }).toArray();
+async function collecting(connection) {
+    return await connection.find({}, { limit: 100 }).toArray();
 }
 
 async function parseLog(dataList, parseDate, prefix) {
@@ -92,9 +105,6 @@ async function parseLog(dataList, parseDate, prefix) {
             collectionMap[YYYYMMDD] = [];
 
         collectionMap[YYYYMMDD].push(data);
-
-        if (!sourceLastObjectId[prefix] || sourceLastObjectId[prefix] < data._id.toString())
-            sourceLastObjectId[prefix] = data._id.toString();
     }
 
     const collectionsKeys = Object.keys(collectionMap);
@@ -104,6 +114,12 @@ async function parseLog(dataList, parseDate, prefix) {
 
         const dbCollection = targetDb.collection(collectionName);
         await dbCollection.insertMany(collectionDataList);
+    }
+
+    const collection = sourceDbConnections[prefix];
+
+    for(const data of dataList) {
+        await collection.deleteOne({_id: data._id});
     }
 }
 
